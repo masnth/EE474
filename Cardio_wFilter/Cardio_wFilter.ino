@@ -55,10 +55,11 @@ int fileNo = 1;
 int isCompleted = 0;
 
 // Array of data
-int dataSize = 7400;
-uint16_t data[7400];
+uint16_t dataSize = 7400;
+int data[7400];
 uint16_t rawData[7400];
-int dataNo = 0;
+uint16_t dataNo = 0;
+uint16_t actualDataNo = 0;
 
 // Moving Avg
 float currentAvg;
@@ -144,7 +145,7 @@ void setup() {
   tft.setTextSize(5);
   tft.print("HELLO");
   delay(1000); 
-  tft.fillScreen(ILI9341_WHITE);
+  tft.fillScreen(ILI9341_BLACK);
   
   // Set the array data to 0
   for (int i = 0; i < dataSize; i++) {
@@ -201,7 +202,7 @@ void adc_init()
   ADC0_SC3 = ADC_SC3_AVGE | ADC_SC3_AVGS(0);
 
   adcCalibrate();
-  Serial.println("calibrated");
+  //Serial.println("calibrated");
 
   // Enable ADC interrupt, configure pin
   ADC0_SC1A = ADC_SC1_AIEN | 5; //(for more information see page 655 in manual
@@ -233,6 +234,9 @@ void adcCalibrate() {
 
 
 //----------------------------------------------------------------------------
+int startTimeHR = 0;
+int endTimeHR = 0;
+uint8_t isCounting = 0;
 void loop() {
   
   //Serial.println(dataNo);
@@ -241,7 +245,8 @@ void loop() {
   currentTime = millis();
 
   // Stablizing 
-  if (val > 900 && isRunning != 1) {
+  //fix val stable value
+  if (val == 0 && isRunning != 1) {
          isRunning = 1;
          envelopeTimeStart = currentTime;
   }
@@ -266,20 +271,23 @@ void loop() {
         
         // if there is new avgVal, add it into the array data, and erasing the old trace as it draws new signal
         if (increment) {
-          for (uint8_t i = dataSize - 1; i > 0; i--) {
+          for (uint16_t i = dataSize - 1; i > 0; i--) {
             data[i] = data[i - 1];
           }
           data[0] = lastCurrentAvg;
-          
+          //Serial.println(lastCurrentAvg);
+          //Serial.println(rawData[dataNo]);
+          //Serial.println(data[0]);
           increment = 0; 
           k++;
           // tft.width = 320, distance between 2 val = 2.5
           // 320/2.5 = 128 values
           for (int i = 0; i < 128 ; i++) {
-            tft.drawLine(tft.width() - 2.5 * i, data[i+k]/5 + tft.height()/10, tft.width() - 2.5 * (i + 1), data[i + 1 + k]/5 + tft.height()/10, ILI9341_WHITE); 
+            tft.drawLine(2.5 * i, data[i+k]/5 + tft.height()/2, 2.5 * (i + 1), data[i + 1 + k]/5 + tft.height()/2, ILI9341_BLACK); 
           }
           k = 0;
         }
+
         for (int i = 0; i < tft.width(); i+=25) {
           tft.drawLine(i, tft.height(),  i, 0, ILI9341_RED);           //y
           tft.drawLine(tft.width(), i, 0, i, ILI9341_RED);            //x
@@ -290,13 +298,35 @@ void loop() {
          
         }
         for (int i = 0; i < 128; i++) {   
-          tft.drawLine(tft.width() - 2.5 * i, data[i]/5 + tft.height()/10, tft.width() - 2.5 * (i + 1), data[i + 1]/5 + tft.height()/10, ILI9341_BLACK);
+          tft.drawLine(2.5 * i, data[i]/5 + tft.height()/2, 2.5 * (i + 1), data[i + 1]/5 + tft.height()/2, ILI9341_GREEN);
         }
+
+        // calculate heart rate
+        if (data[0] > 300 && isCounting == 0) 
+        {
+          startTimeHR = millis();
+          isCounting = 1;
+        }
+        else if (data[0] > 300 && isCounting == 1) 
+        {
+          endTimeHR = millis();
+          uint8_t HR = 1000 / (endTimeHR - startTimeHR) * 60;
+//            Serial.println(endTimeHR);
+//            Serial.println(startTimeHR);
+          Serial.println(HR);
+//            Serial.println();
+//            tft.setRotation(3);
+//            tft.setTextSize(2);
+//            tft.print("Heart rate: ");
+//            tft.print(HR);
+          isCounting = 0;
+        }
+
       }
       // erase the old trace when hitting the button to run
       else if (state == 1 && isStopping == 1) {
         for (int i = 0; i < dataSize - 1; i++) {
-          tft.drawLine(tft.width() - 5 * i, data[i]/5 + tft.height()/10, tft.width() - 5 * (i + 1), data[i + 1]/5 + tft.height()/10, ILI9341_WHITE);
+          tft.drawLine(2.5 * i, data[i]/5 + tft.height()/2, 2.55 * (i + 1), data[i + 1]/5 + tft.height()/2, ILI9341_BLACK);
         }
         isStopping = 0;   
         //Serial.println("HHAHHAHAHAH");     
@@ -352,41 +382,46 @@ float avg(float currentVal, int n, float lastAvg){
 }
 
 //----------------------------------------------------------------------------
-//Low pass filter
-uint16_t lowpass(uint16_t rawData[], uint16_t dataNo)
+//Low pass filter at 8Hz 2nd order
+int v0l = 0;
+int v1l = 0;
+int v2l;
+float lowpass(int x) //class II 
 {
-  uint16_t temp;
-  if (dataNo >= 12)
-    temp = 2*data[dataNo-1] - data[dataNo - 2] + rawData[dataNo] -
-                  2*rawData[dataNo-6] + rawData[dataNo-12];  
-  else
-    temp = rawData[dataNo];
-  return temp;
+        v0l = v1l;
+        v1l = v2l;
+        v2l = (8.826086668431319324e-3 * x)
+           + (-0.75251618158180888507 * v0l)
+           + (1.71721183490808360084 * v1l);
+        //Serial.println((v0 + v2) + 2 * v2);
+        return ((v0l + v2l) + 2 * v1l);
 }
 
 //----------------------------------------------------------------------------
 //High pass filter
-uint16_t highpass(uint16_t rawData[], uint16_t dataNo)
-{
-  uint16_t temp;
-  if (dataNo >= 32)
-    temp = -data[dataNo-1] + rawData[dataNo] -
-                  32*rawData[dataNo-16] + rawData[dataNo-32];  
-  else
-    temp = rawData[dataNo];
-  return temp;
-}
+int v0h = 0;
+int v1h = 0;
+int v2h;
+float highpass(int x) //class II 
+    {
+      v0h = v1h;
+      v1h = v2h;
+      v2h = (9.911535951016632318e-1 * x)
+         + (-0.98238545061412485548 * v0h)
+         + (1.98222892979252818257 * v1h);
+      return (v0h + v2h) - 2 * v1h;
+    }
 
 //----------------------------------------------------------------------------
 //Differentiator filter
-uint16_t diff(uint16_t rawData[], uint16_t dataNo)
+float diff(int currentVal)
 {
-  uint16_t temp;
-  if (dataNo >= 32)
-    temp = 0.2*rawData[dataNo] + 0.1*rawData[dataNo-1] -
-              0.1*rawData[dataNo-3] - 0.2*rawData[dataNo-4];  
+  float temp;
+  if (dataNo >= 4)
+    temp = 0.2*currentVal + 0.1*data[0] -
+              0.1*data[2] - 0.2*data[3];  
   else
-    temp = rawData[dataNo];
+    return currentVal;
   return temp;
 }
 
@@ -395,28 +430,37 @@ uint16_t diff(uint16_t rawData[], uint16_t dataNo)
 //ADC INTERRUPT
 void adc0_isr()
 {
+  dataNo = actualDataNo;
   // ADC0_RA - ADC Data Result Register
   //val = ADC0_RA/4; // read value from pin A0
-  
-  float temp = ADC0_RA/4;
+  rawData[dataNo] = ADC0_RA;
+  //float temp = ADC0_RA/4;
   //val = temp; 
   //val = filter(temp);
+  float temp1 = lowpass(rawData[dataNo]);
+  float temp2 = highpass(temp1);
+//  uint16_t temp2 = highpass(temp1);
+  temp1 = diff(temp2);
+  val = temp1; 
+  
+  lastCurrentAvg = val*abs(val)/50/16;
+  //temp2/4;//
   // Calculate moving avg if there is new data
-  if (n == 0) {
-    currentAvg = val;
-    n++; 
-  }
-  else if (n < 4) {
-    currentAvg = avg(val, n, lastAvg);
-    lastAvg = currentAvg;
-    n++;
-  }
-  else {
-    n = 0;
-    lastCurrentAvg = currentAvg;
-  }
+//  if (n == 0) {
+//    currentAvg = val;
+//    n++; 
+//  }
+//  else if (n < 4) {
+//    currentAvg = avg(val, n, lastAvg);
+//    lastAvg = currentAvg;
+//    n++;
+//  }
+//  else {
+//    n = 0;
+//    lastCurrentAvg = currentAvg;
+//  }
   increment = 1;
-  dataNo++;
+  
 }
 
 // PDB INTERRUPT
